@@ -26,11 +26,14 @@ public class CapsuleControl : MonoBehaviour
     private readonly RaycastHit[] _internalCharacterHits = new RaycastHit[16];
     private readonly Collider[] _internalProbedColliders = new Collider[16];
 
-    public const float GroundProbingBackstepDistance = 0.1f;
-    public const float SecondaryProbesVertical = 0.02f;
-    public const float SecondaryProbesHorizontal = 0.001f;
+    private const float G = 9.8f;
+    private const float GroundProbingBackstepDistance = 0.1f;
+    private const float SecondaryProbesVertical = 0.02f;
+    private const float SecondaryProbesHorizontal = 0.001f;
+    private const float CollisionOffset = 0.01f;
 
-    public const float CollisionOffset = 0.01f;
+    private bool falling = false;
+    private Vector3 fallingSpeed = Vector3.zero;
 
     private void Start()
     {
@@ -51,40 +54,63 @@ public class CapsuleControl : MonoBehaviour
             return;
         Vector3 curPos = Player.position;
         Quaternion curRotation = Player.rotation;
-
         float stepperDis = deltaTime * Speed;
         Vector3 prospectivePos = curPos + stepperDis * input;
 
         //检测前进方向上的碰撞
         int nHitsForward = CapsuleCast(curPos, curRotation, moveDir, stepperDis, out RaycastHit closestHit, _internalCharacterHits);
         bool bHitForward = nHitsForward > 0 && closestHit.distance > 0f;
-        Vector3 checkStepPos;
         if (bHitForward)
         {
+            //TODO 检测落差，有落差为台阶，无落差为斜坡
             Debug.DrawLine(closestHit.point, closestHit.point + closestHit.distance * closestHit.normal, Color.red, Time.deltaTime * 60000, false);
-            checkStepPos = prospectivePos + _cachedWorldUp * MaxStepHeight;
         }
-        else
-        {
-            //前进方向检测不到碰撞
-            checkStepPos = prospectivePos;
-        }
-        int nHitsDownward = CapsuleCast(checkStepPos, curRotation, -_cachedWorldUp, MaxStepHeight, out RaycastHit stepHit, _internalCharacterHits);
 
-        Vector3 checkOverlapPos = prospectivePos;
+        Vector3 checkStepPos = prospectivePos + _cachedWorldUp * MaxStepHeight;
+        float checkStepDis = MaxStepHeight * 2f;
+        int nHitsDownward = CapsuleCast(checkStepPos, curRotation, -_cachedWorldUp, checkStepDis, out RaycastHit stepHit, _internalCharacterHits);
+
         if (nHitsDownward > 0)
         {
-            Debug.DrawLine(stepHit.point, stepHit.point + stepHit.distance * stepHit.normal, Color.cyan, Time.deltaTime * 60000, false);
-            checkOverlapPos = checkStepPos - stepHit.distance * _cachedWorldUp;
-            Vector3 correctiveOverlapPos = CharacterOverlapPenetration(checkOverlapPos, curRotation, _internalProbedColliders, _layerMask);
-            Player.position = correctiveOverlapPos;
+            if (!falling)
+            {
+                Debug.DrawLine(stepHit.point, stepHit.point + stepHit.distance * stepHit.normal, Color.cyan, Time.deltaTime * 60000, false);
+                Vector3 checkOverlapPos = checkStepPos - stepHit.distance * _cachedWorldUp;
+                Vector3 correctiveOverlapPos = CharacterOverlapPenetration(checkOverlapPos, curRotation, _internalProbedColliders, _layerMask);
+                Player.position = correctiveOverlapPos;
+            }
+            else
+            {
+                if (stepHit.distance < GroundProbingBackstepDistance)
+                {
+                    falling = false;
+                }
+            }
         }
         else
         {
             if (!bHitForward)
             {
-                //TODO 悬空
+                //悬空
+                if (!falling)
+                {
+                    falling = true;
+                    fallingSpeed = Speed * moveDir;
+                }
             }
+            else
+            {
+                if (falling)
+                {
+                    fallingSpeed = Vector3.Project(fallingSpeed, _cachedWorldUp);
+                }
+            }
+        }
+
+        if (falling)
+        {
+            fallingSpeed += deltaTime * G * -_cachedWorldUp;
+            Player.position += deltaTime * fallingSpeed;
         }
     }
 
