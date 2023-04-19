@@ -3,7 +3,6 @@ using UnityEngine;
 public class CapsuleControl : MonoBehaviour
 {
     public Transform Player;
-    public Transform PlayerCast;
 
     [Range(0f, 100f)]
     public float Speed = 5f;
@@ -48,103 +47,58 @@ public class CapsuleControl : MonoBehaviour
         float deltaTime = Time.deltaTime;
         Vector3 input = DirectionInput();
         Vector3 moveDir = input.normalized;
+        if (input.sqrMagnitude <= 0.01f)
+            return;
         Vector3 curPos = Player.position;
         Quaternion curRotation = Player.rotation;
 
         float stepperDis = deltaTime * Speed;
         Vector3 prospectivePos = curPos + stepperDis * input;
 
-        //检测前进路径上的碰撞
-        int nHitsForward = CapsuleCastForwards(curPos, curRotation, moveDir,
-            stepperDis, out RaycastHit closestHit, _internalCharacterHits);
-        if (nHitsForward > 0)
+        //检测前进方向上的碰撞
+        int nHitsForward = CapsuleCast(curPos, curRotation, moveDir, stepperDis, out RaycastHit closestHit, _internalCharacterHits);
+        bool bHitForward = nHitsForward > 0 && closestHit.distance > 0f;
+        Vector3 checkStepPos;
+        if (bHitForward)
         {
             Debug.DrawLine(closestHit.point, closestHit.point + closestHit.distance * closestHit.normal, Color.red, Time.deltaTime * 60000, false);
-
-            //碰撞点与当前点高度差
-            //Vector3 verticalCharToHit = Vector3.Project(closestHit.point - curPos, _cachedWorldUp);
-            //抬高到与当前碰撞点齐平，再加检测距离
-            //Vector3 checkStepPos = closestHit.point - verticalCharToHit + (_cachedWorldUp * MaxStepHeight);
-            Vector3 checkStepPos = prospectivePos + _cachedWorldUp * MaxStepHeight;
-            Debug.DrawRay(checkStepPos, -_cachedWorldUp, Color.blue, Time.deltaTime * 60000, false);
-
-            int nHitsDownward = CapsuleCastDownwards(checkStepPos, curRotation, -_cachedWorldUp,
-                MaxStepHeight, out RaycastHit stepHit, _internalCharacterHits);
-
-            Vector3 checkOverlapPos = prospectivePos;
-            if (nHitsDownward > 0 && stepHit.distance > 0f)
-            {
-                Debug.DrawLine(stepHit.point, stepHit.point + stepHit.distance * stepHit.normal, Color.cyan, Time.deltaTime * 60000, false);
-                checkOverlapPos = checkStepPos - stepHit.distance * _cachedWorldUp;
-                Debug.Log($"{nHitsDownward} 拉高距离:{checkOverlapPos.y - prospectivePos.y}");
-            }
-            Vector3 correctiveOverlapPos = checkOverlapPos;
-            int nbOverlaps = CharacterOverlap(checkOverlapPos, curRotation, _internalProbedColliders, _layerMask);
-            if (nbOverlaps > 0)
-            {
-                Debug.Log($"重叠数量 {nbOverlaps}");
-                Vector3 resolutionDirection = _cachedWorldUp;
-                float resolutionDistance = 0f;
-                for (int i = 0; i < nbOverlaps; i++)
-                {
-                    //胶囊体中心在地面以下时检测会失效
-                    Transform overlappedTransform = _internalProbedColliders[i].GetComponent<Transform>();
-                    if (Physics.ComputePenetration(
-                            Capsule,
-                            prospectivePos,
-                            curRotation,
-                            _internalProbedColliders[i],
-                            overlappedTransform.position,
-                            overlappedTransform.rotation,
-                            out resolutionDirection,
-                            out resolutionDistance))
-                    {
-                        Debug.Log($"穿透距离 {resolutionDistance}");
-
-                        bool isStable = IsStableOnNormal(resolutionDirection);
-                        //resolutionDirection = GetObstructionNormal(resolutionDirection, isStable);
-
-                        Vector3 resolutionMovement = resolutionDirection * (resolutionDistance + CollisionOffset);
-                        correctiveOverlapPos += resolutionMovement;
-
-                        break;
-                    }
-                }
-            }
-            Player.position = correctiveOverlapPos;
-
-            //台阶检测
-            //ProbeGround(closestHit.collider, closestHit.normal, closestHit.point, prospectivePos, curRotation);
+            checkStepPos = prospectivePos + _cachedWorldUp * MaxStepHeight;
         }
         else
         {
-            //检测不到碰撞
-            Player.position = prospectivePos;
+            //前进方向检测不到碰撞
+            checkStepPos = prospectivePos;
+        }
+        int nHitsDownward = CapsuleCast(checkStepPos, curRotation, -_cachedWorldUp, MaxStepHeight, out RaycastHit stepHit, _internalCharacterHits);
+
+        Vector3 checkOverlapPos = prospectivePos;
+        if (nHitsDownward > 0)
+        {
+            Debug.DrawLine(stepHit.point, stepHit.point + stepHit.distance * stepHit.normal, Color.cyan, Time.deltaTime * 60000, false);
+            checkOverlapPos = checkStepPos - stepHit.distance * _cachedWorldUp;
+            Vector3 correctiveOverlapPos = CharacterOverlapPenetration(checkOverlapPos, curRotation, _internalProbedColliders, _layerMask);
+            Player.position = correctiveOverlapPos;
+        }
+        else
+        {
+            if (!bHitForward)
+            {
+                //TODO 悬空
+            }
         }
     }
 
-    private bool ProbeGround(Collider hitCollider, Vector3 hitNormal, Vector3 hitPoint, Vector3 position, Quaternion rotation)
-    {
-        Vector3 checkDir = rotation * -_cachedWorldUp;
-        Vector3 checkPos = position - MaxStepHeight * checkDir;
-        RaycastHit closestHit;
-        int nHitsDownward = CapsuleCastDownwards(checkPos, rotation, checkDir, MaxStepHeight, out closestHit, _internalCharacterHits);
-
-        return true;
-    }
-
-    private int CapsuleCastForwards(Vector3 position, Quaternion rotation, Vector3 direction, float distance, out RaycastHit closestHit, RaycastHit[] _tmpHitsBuffer)
+    private int CapsuleCast(Vector3 position, Quaternion rotation, Vector3 direction, float distance, out RaycastHit closestHit, RaycastHit[] _tmpHitsBuffer)
     {
         closestHit = new RaycastHit();
 
-        //拉高一点检测，平地时不受地面影响
         int nHits = Physics.CapsuleCastNonAlloc(
-                position + (rotation * _characterTransformToCapsuleBottomHemi) + (_cachedWorldUp * SecondaryProbesVertical),
-                position + (rotation * _characterTransformToCapsuleTopHemi) + (_cachedWorldUp * SecondaryProbesVertical),
+                position + (rotation * _characterTransformToCapsuleBottomHemi) - (direction * GroundProbingBackstepDistance),
+                position + (rotation * _characterTransformToCapsuleTopHemi) - (direction * GroundProbingBackstepDistance),
                 Capsule.radius,
                 direction,
                 _tmpHitsBuffer,
-                distance,
+                distance + GroundProbingBackstepDistance,
                 _layerMask,
                 QueryTriggerInteraction.Ignore);
 
@@ -176,37 +130,38 @@ public class CapsuleControl : MonoBehaviour
         return validHits;
     }
 
-    private int CapsuleCastDownwards(Vector3 position, Quaternion rotation, Vector3 direction, float distance, out RaycastHit closestHit, RaycastHit[] _tmpHitsBuffer)
+    public Vector3 CharacterOverlapPenetration(Vector3 position, Quaternion rotation, Collider[] overlappedColliders, LayerMask layers)
     {
-        closestHit = new RaycastHit();
-
-        int nHits = Physics.CapsuleCastNonAlloc(
-                position + (rotation * _characterTransformToCapsuleBottomHemi) - (direction * GroundProbingBackstepDistance),
-                position + (rotation * _characterTransformToCapsuleTopHemi) - (direction * GroundProbingBackstepDistance),
-                Capsule.radius,
-                direction,
-                _tmpHitsBuffer,
-                distance + GroundProbingBackstepDistance,
-                _layerMask,
-                QueryTriggerInteraction.Ignore);
-
-        float closestDistance = Mathf.Infinity;
-        for (int i = 0; i < nHits; i++)
+        Vector3 correctiveOverlapPos = position;
+        int nbOverlaps = CharacterOverlap(position, rotation, overlappedColliders, _layerMask);
+        if (nbOverlaps > 0)
         {
-            RaycastHit hit = _tmpHitsBuffer[i];
-            float hitDistance = hit.distance;
-            if (hitDistance > 0f)
+            Debug.Log($"重叠数量 {nbOverlaps}");
+            for (int i = 0; i < nbOverlaps; i++)
             {
-                if (hitDistance < closestDistance)
+                //胶囊体中心在地面以下时检测会失效
+                Transform overlappedTransform = overlappedColliders[i].GetComponent<Transform>();
+                if (Physics.ComputePenetration(
+                        Capsule,
+                        position,
+                        rotation,
+                        overlappedColliders[i],
+                        overlappedTransform.position,
+                        overlappedTransform.rotation,
+                        out Vector3 resolutionDirection,
+                        out float resolutionDistance))
                 {
-                    closestHit = hit;
-                    closestHit.distance -= GroundProbingBackstepDistance;
-                    closestDistance = hitDistance;
+                    Debug.Log($"穿透距离 {resolutionDistance}");
+
+                    bool isStable = IsStableOnNormal(resolutionDirection);
+                    //resolutionDirection = GetObstructionNormal(resolutionDirection, isStable);
+
+                    Vector3 resolutionMovement = resolutionDirection * (resolutionDistance + CollisionOffset);
+                    correctiveOverlapPos += resolutionMovement;
                 }
             }
         }
-
-        return nHits;
+        return correctiveOverlapPos;
     }
 
     public int CharacterOverlap(Vector3 position, Quaternion rotation, Collider[] overlappedColliders, LayerMask layers, float inflate = 0f)
