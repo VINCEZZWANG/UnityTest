@@ -1,6 +1,6 @@
 using UnityEngine;
 
-public class CapsuleControl : MonoBehaviour
+public class CapsuleControlTest : MonoBehaviour
 {
     public Transform Player;
 
@@ -12,9 +12,6 @@ public class CapsuleControl : MonoBehaviour
     public float MaxStepHeight = 0.5f;
 
     public LayerMask WalkLayerMask;
-
-    //[Range(0f, 360f)]
-    //public float AnguleSpeed = 180f;
 
     private CapsuleCollider Capsule;
     private Camera mainCamera;
@@ -49,21 +46,67 @@ public class CapsuleControl : MonoBehaviour
     {
         float deltaTime = Time.deltaTime;
         Vector3 input = DirectionInput();
-        Vector3 moveDir = input.normalized;
-        if (input.sqrMagnitude <= 0.01f)
+        if (!falling && input.sqrMagnitude <= 0.01f)
             return;
         Vector3 curPos = Player.position;
         Quaternion curRotation = Player.rotation;
+        Vector3 atCharacterUp = curRotation * _cachedWorldUp;
+        Vector3 moveDir = Vector3.ProjectOnPlane(input, atCharacterUp).normalized;
         float stepperDis = deltaTime * Speed;
-        Vector3 prospectivePos = curPos + stepperDis * input;
+        Vector3 prospectivePos = curPos + stepperDis * moveDir;
 
         //检测前进方向上的碰撞
         int nHitsForward = CapsuleCast(curPos, curRotation, moveDir, stepperDis, out RaycastHit closestHit, _internalCharacterHits);
         bool bHitForward = nHitsForward > 0 && closestHit.distance > 0f;
         if (bHitForward)
         {
-            //TODO 检测落差，有落差为台阶，无落差为斜坡
-            Debug.DrawLine(closestHit.point, closestHit.point + closestHit.distance * closestHit.normal, Color.red, Time.deltaTime * 60000, false);
+            //Debug.DrawLine(closestHit.point, closestHit.point + closestHit.distance * closestHit.normal, Color.red, Time.deltaTime * 60000, false);
+            //Debug.Log($"前进方向碰撞:{closestHit.transform.name}");
+
+            #region 检测落差
+
+            bool foundInnerNormal = false;
+            bool foundOuterNormal = false;
+            bool isStableLedgeInnerNormal = false;
+            bool isStableLedgeOuterNormal = false;
+            Vector3 checkPos = closestHit.point;
+            if (CharacterCollisionsRaycast(
+                        checkPos + (atCharacterUp * SecondaryProbesVertical) + (moveDir * SecondaryProbesHorizontal),
+                        -atCharacterUp,
+                        MaxStepHeight + SecondaryProbesVertical,
+                        out RaycastHit innerLedgeHit,
+                        _internalCharacterHits) > 0)
+            {
+                foundInnerNormal = true;
+                isStableLedgeInnerNormal = IsStableOnNormal(innerLedgeHit.normal);
+            }
+
+            if (CharacterCollisionsRaycast(
+                        checkPos + (atCharacterUp * SecondaryProbesVertical) + (-moveDir * SecondaryProbesHorizontal),
+                        -atCharacterUp,
+                        MaxStepHeight + SecondaryProbesVertical,
+                        out RaycastHit outerLedgeHit,
+                        _internalCharacterHits) > 0)
+            {
+                foundOuterNormal = true;
+                isStableLedgeOuterNormal = IsStableOnNormal(outerLedgeHit.normal);
+            }
+            //Debug.Log($"{Time.frameCount} 检测上台阶 {FoundInnerNormal}-{FoundOuterNormal} {isStableLedgeInnerNormal}-{isStableLedgeOuterNormal}");
+            if (foundInnerNormal && foundOuterNormal)
+            {
+                if (!isStableLedgeOuterNormal)
+                {
+                    //爬陡坡
+                    return;
+                }
+            }
+            if (foundOuterNormal)
+            {
+                Debug.Log($"{Time.frameCount} outer");
+                prospectivePos = curPos + Vector3.ProjectOnPlane(moveDir, outerLedgeHit.normal).normalized * stepperDis;
+            }
+
+            #endregion 检测落差
         }
 
         Vector3 checkStepPos = prospectivePos + _cachedWorldUp * MaxStepHeight;
@@ -74,7 +117,7 @@ public class CapsuleControl : MonoBehaviour
         {
             if (!falling)
             {
-                Debug.DrawLine(stepHit.point, stepHit.point + stepHit.distance * stepHit.normal, Color.cyan, Time.deltaTime * 60000, false);
+                //Debug.DrawLine(stepHit.point, stepHit.point + stepHit.distance * stepHit.normal, Color.cyan, Time.deltaTime * 60000, false);
                 Vector3 checkOverlapPos = checkStepPos - stepHit.distance * _cachedWorldUp;
                 Vector3 correctiveOverlapPos = CharacterOverlapPenetration(checkOverlapPos, curRotation, _internalProbedColliders, _layerMask);
                 Player.position = correctiveOverlapPos;
@@ -133,6 +176,12 @@ public class CapsuleControl : MonoBehaviour
         for (int i = nHits - 1; i >= 0; i--)
         {
             RaycastHit hit = _tmpHitsBuffer[i];
+            if (nHits > 1)
+            {
+                Debug.Log($"[{Time.frameCount}] 碰撞 {i}-{nHits} {hit.transform.name} distance:{hit.distance}");
+                DrawHitLine(hit, Color.yellow);
+            }
+
             float hitDistance = hit.distance;
             if (hitDistance > 0f)
             {
@@ -159,10 +208,10 @@ public class CapsuleControl : MonoBehaviour
     public Vector3 CharacterOverlapPenetration(Vector3 position, Quaternion rotation, Collider[] overlappedColliders, LayerMask layers)
     {
         Vector3 correctiveOverlapPos = position;
-        int nbOverlaps = CharacterOverlap(position, rotation, overlappedColliders, _layerMask);
+        int nbOverlaps = CharacterOverlap(position, rotation, overlappedColliders, layers);
         if (nbOverlaps > 0)
         {
-            Debug.Log($"重叠数量 {nbOverlaps}");
+            //Debug.Log($"重叠数量 {nbOverlaps}");
             for (int i = 0; i < nbOverlaps; i++)
             {
                 //胶囊体中心在地面以下时检测会失效
@@ -177,7 +226,7 @@ public class CapsuleControl : MonoBehaviour
                         out Vector3 resolutionDirection,
                         out float resolutionDistance))
                 {
-                    Debug.Log($"穿透距离 {resolutionDistance}");
+                    //Debug.Log($"穿透距离 {resolutionDistance}");
 
                     bool isStable = IsStableOnNormal(resolutionDirection);
                     //resolutionDirection = GetObstructionNormal(resolutionDirection, isStable);
@@ -223,6 +272,45 @@ public class CapsuleControl : MonoBehaviour
         return nbHits;
     }
 
+    public int CharacterCollisionsRaycast(Vector3 position, Vector3 direction, float distance, out RaycastHit closestHit, RaycastHit[] hits)
+    {
+        int nbUnfilteredHits = Physics.RaycastNonAlloc(
+            position,
+            direction,
+            hits,
+            distance,
+            _layerMask,
+            QueryTriggerInteraction.Ignore);
+
+        closestHit = new RaycastHit();
+        float closestDistance = Mathf.Infinity;
+        int nbHits = nbUnfilteredHits;
+        for (int i = nbUnfilteredHits - 1; i >= 0; i--)
+        {
+            RaycastHit hit = hits[i];
+            float hitDistance = hit.distance;
+
+            if (hitDistance <= 0f || !hit.collider == Capsule)
+            {
+                nbHits--;
+                if (i < nbHits)
+                {
+                    hits[i] = hits[nbHits];
+                }
+            }
+            else
+            {
+                if (hitDistance < closestDistance)
+                {
+                    closestHit = hit;
+                    closestDistance = hitDistance;
+                }
+            }
+        }
+
+        return nbHits;
+    }
+
     private bool IsStableOnNormal(Vector3 normal)
     {
         return Vector3.Angle(Vector3.up, normal) <= MaxStableSlopeAngle;
@@ -234,5 +322,10 @@ public class CapsuleControl : MonoBehaviour
         Vector3 dirInPlayer = mainCamera.transform.TransformDirection(input);
         dirInPlayer.y = 0;
         return dirInPlayer;
+    }
+
+    private void DrawHitLine(RaycastHit hit, Color color)
+    {
+        Debug.DrawLine(hit.point, hit.point + hit.distance * hit.normal, color, 10f);
     }
 }
