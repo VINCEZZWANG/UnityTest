@@ -57,7 +57,7 @@ public class CapsuleController
         bool bHitForward = nHitsForward > 0;
         if (bHitForward)
         {
-            //DrawHitLine(highestHit, Color.yellow);
+            DrawHitLine(highestHit, Color.yellow, "碰撞点");
         }
 
         #region 检测落差
@@ -68,7 +68,7 @@ public class CapsuleController
         bool isStableLedgeOuterNormal = false;
         Vector3 checkPos = closestHit.point;
         if (CharacterCollisionsRaycast(
-                    checkPos + (atCharacterUp * SecondaryProbesVertical) + (moveDir * SecondaryProbesHorizontal),
+                    checkPos + (atCharacterUp * SecondaryProbesVertical) + (-moveDir * SecondaryProbesHorizontal),
                     -atCharacterUp,
                     _maxStepHeight + SecondaryProbesVertical,
                     out RaycastHit innerLedgeHit,
@@ -76,11 +76,12 @@ public class CapsuleController
         {
             foundInnerNormal = true;
             isStableLedgeInnerNormal = IsStableOnNormal(innerLedgeHit.normal);
-            DrawHitLine(innerLedgeHit, Color.red);
+            innerLedgeHit.distance -= SecondaryProbesVertical;
+            DrawHitLine(innerLedgeHit, Color.red, "台阶内侧");
         }
 
         if (CharacterCollisionsRaycast(
-                    checkPos + (atCharacterUp * SecondaryProbesVertical) + (-moveDir * SecondaryProbesHorizontal),
+                    checkPos + (atCharacterUp * SecondaryProbesVertical) + (moveDir * SecondaryProbesHorizontal),
                     -atCharacterUp,
                     _maxStepHeight + SecondaryProbesVertical,
                     out RaycastHit outerLedgeHit,
@@ -88,21 +89,44 @@ public class CapsuleController
         {
             foundOuterNormal = true;
             isStableLedgeOuterNormal = IsStableOnNormal(outerLedgeHit.normal);
-            DrawHitLine(outerLedgeHit, Color.green);
+            outerLedgeHit.distance -= SecondaryProbesVertical;
+            DrawHitLine(outerLedgeHit, Color.green, "台阶外侧");
         }
 
-        //Debug.Log($"{Time.frameCount} 检测上台阶 {FoundInnerNormal}-{FoundOuterNormal} {isStableLedgeInnerNormal}-{isStableLedgeOuterNormal}");
+        Log($"检测台阶 <color=#FF0000>{foundInnerNormal}</color>-<color=#00FF00>{foundOuterNormal}</color> {isStableLedgeInnerNormal}-{isStableLedgeOuterNormal}");
+
         if (foundInnerNormal && foundOuterNormal)
         {
+            Vector3 ledgeVector = Vector3.Project(outerLedgeHit.point - innerLedgeHit.point, _cachedWorldUp);
+            float deltaH = ledgeVector.magnitude;
+
+            Log($"检测台阶 deltaH:{deltaH}");
+            if (deltaH > 0f)
+            {
+                if (deltaH > _maxStepHeight + 0.01f)
+                {
+                    Log("落差大于可行走台阶高度");
+                }
+
+                if (Vector3.Dot(ledgeVector, _cachedWorldUp) > 0f)
+                {
+                    Log("上坡");
+                }
+                else
+                {
+                    Log("下坡");
+                }
+            }
+
             if (!isStableLedgeOuterNormal)
             {
-                //爬陡坡
+                Log("爬陡坡");
                 return false;
             }
         }
         if (foundOuterNormal)
         {
-            Debug.Log($"{Time.frameCount} outer");
+            //Log($"outer");
             prospectivePos = curPos + Vector3.ProjectOnPlane(moveDir, outerLedgeHit.normal).normalized * stepperDis;
         }
 
@@ -487,9 +511,14 @@ public class CapsuleController
         return Vector3.Angle(Vector3.up, normal) <= _maxStableSlopeAngle;
     }
 
-    private void DrawHitLine(RaycastHit hit, Color color)
+    private void DrawHitLine(RaycastHit hit, Color color, string desc = "")
     {
-        Debug.Log($"[{Time.frameCount}] {hit.transform.name} {hit.point} distance:{hit.distance}");
+        //Log($"{desc}-{hit.transform.name} {hit.point} distance:{hit.distance}");
         Debug.DrawLine(hit.point, hit.point + hit.distance * hit.normal, color, 10f);
+    }
+
+    private void Log(string message)
+    {
+        Debug.Log($"[{Time.frameCount}] {message}");
     }
 }
